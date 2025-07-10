@@ -4,6 +4,39 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-rand = "0.8"
-rand_distr = "0.4"
+clap = { version = "^4.5.4", features = ["derive"] }
+
+concrete-ntt = "^0.1.2"
+console = "^0.15.8"
+criterion = "^0.5.1"
+doc-comment = "^0.3.3"
+env_logger = "^0.11.3"
+ethnum = "^1.5.0"
+fastdiv = "^0.1.0"
+indicatif = "^0.17.8"
+itertools = "^0.12.1"
+log = "^0.4.21"
+ndarray = "^0.15.6"
+num-bigint = "^0.4.4"
+num-bigint-dig = "^0.8.4"
+num-traits = "^0.2.18"
+proptest = "^1.4.0"
+prost = "^0.12.4"
+prost-build = "^0.12.3"
+
+rand = "^0.9"
+rand_chacha = "^0.9.0"
+rand_distr = "0.5.1"
+
+sha2 = "^0.10.8"
+thiserror = "^1.0.58"
+zeroize = "^1.8.0"
+zeroize_derive = "^1.4.2"
+
+ark-bn254 = { version = "0.5.0", features = ["curve", "scalar_field"], default-features = false }
+ark-std = { version = "0.5.0", default-features = false, features = ["print-trace"] }
+ark-ff = "0.5.0"
+ark-ec = "0.5.0"
+ark-groth16 = "0.5.0"
+ark-crypto-primitives = "0.5.0"
+ark-relations = "0.5.0"
