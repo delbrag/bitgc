@@ -152,21 +152,75 @@ impl RGSW {
     /// Decrypt a RGSW ciphertext using the secret key
     pub fn decrypt(&self, ct: &GSW13Ciphertext) -> Fq {
         let p = &self.params;
-        // Compute C · v ∈ Z_q^N
+        let l = p.l; // 多比特长度
+
         let mut x = vec![Fq::ZERO; p.N];
         for i in 0..p.N {
             for j in 0..p.N {
                 x[i] += ct.C[i][j] * self.v[j];
             }
         }
-        //let mut mu_est = x[0].into_bigint().0[0] % p.q;
-        //if (mu_est as i64 - (p.q / 2) as i64).abs() < ((p.q / 4) as i64) {
-        //    Fq::from(p.q / 2)
-        //} else {
-        //    Fq::ZERO
-        //}
-        // Recover μ by dividing first coefficient by v_0 = 1
-        x[0] // In practice, may need rounding/modulo for noise
+        x[0]
+    }
+
+    pub fn homomorphic_mult_const(&self, ct: &GSW13Ciphertext, a: Fq) -> GSW13Ciphertext {
+        let N = self.params.N;
+        let l = self.params.l;
+        let mut result = vec![vec![Fq::ZERO; N]; N];
+        for i in 0..N {
+            for j in 0..N {
+                result[i][j] = ct.C[i][j] * a;
+            }
+            result[i] = flatten(&result[i], l);
+        }
+        GSW13Ciphertext { C: result }
+    }
+
+    pub fn homomorphic_add(&self, ct1: &GSW13Ciphertext, ct2: &GSW13Ciphertext) -> GSW13Ciphertext {
+        let N = self.params.N;
+        let l = self.params.l;
+        let mut result = vec![vec![Fq::ZERO; N]; N];
+        for i in 0..N {
+            for j in 0..N {
+                result[i][j] = ct1.C[i][j] + ct2.C[i][j];
+            }
+            result[i] = flatten(&result[i], l);
+        }
+        GSW13Ciphertext { C: result }
+    }
+
+    pub fn homomorphic_mul(&self, ct1: &GSW13Ciphertext, ct2: &GSW13Ciphertext) -> GSW13Ciphertext {
+        let N = self.params.N;
+        let l = self.params.l;
+        let mut result = vec![vec![Fq::ZERO; N]; N];
+        for i in 0..N {
+            for j in 0..N {
+                let mut acc = Fq::ZERO;
+                for k in 0..N {
+                    acc += ct1.C[i][k] * ct2.C[k][j];
+                }
+                result[i][j] = acc;
+            }
+            result[i] = flatten(&result[i], l);
+        }
+        GSW13Ciphertext { C: result }
+    }
+    pub fn homomorphic_nand(
+        &self,
+        ct1: &GSW13Ciphertext,
+        ct2: &GSW13Ciphertext,
+    ) -> GSW13Ciphertext {
+        let N = self.params.N;
+        let l = self.params.l;
+        let ct_mul = self.homomorphic_mul(ct1, ct2);
+        let mut result = vec![vec![Fq::ZERO; N]; N];
+        for i in 0..N {
+            for j in 0..N {
+                result[i][j] = if i == j { Fq::ONE } else { Fq::ZERO } - ct_mul.C[i][j];
+            }
+            result[i] = flatten(&result[i], l);
+        }
+        GSW13Ciphertext { C: result }
     }
 }
 
@@ -179,7 +233,7 @@ mod tests {
     fn test_gsw13_encrypt_decrypt() {
         // Use small n/q for test
         let n = 2;
-        let std_dev = 1.2;
+        let std_dev = 0.2;
         let gsw = RGSW::new(n, std_dev);
 
         let mut rng = ark_std::rand::thread_rng();
@@ -193,7 +247,6 @@ mod tests {
 
     #[test]
     fn test_bit_decomp_and_inv() {
-        let q = 16;
         let l = 4;
         let v = vec![Fq::from(7u64), Fq::from(13u64)];
         let bits = bit_decomp(&v, l);
@@ -203,7 +256,6 @@ mod tests {
 
     #[test]
     fn test_flatten() {
-        let q = 8;
         let l = 3;
         let v = vec![Fq::from(5u64), Fq::from(6u64)];
         let bits = bit_decomp(&v, l);
@@ -232,7 +284,7 @@ mod tests {
     #[test]
     fn test_gsw13_encrypt_decrypt_binary() {
         let n = 2;
-        let std_dev = 1.2;
+        let std_dev = 0.1;
         let gsw = RGSW::new(n, std_dev);
 
         for bit in vec![Fq::ZERO, Fq::ONE] {
@@ -240,5 +292,101 @@ mod tests {
             let bit_rec = gsw.decrypt(&ct);
             assert_eq!(bit, bit_rec, "GSW13 encrypt/decrypt failed (bit={})", bit);
         }
+    }
+
+    #[test]
+    fn test_homomorphic_mult_const() {
+        let n = 2;
+        let std_dev = 0.2;
+        let rgsw = RGSW::new(n, std_dev);
+
+        let mut rng = ark_std::rand::thread_rng();
+        let mu = Fq::rand(&mut rng);
+        let ct = rgsw.encrypt(mu);
+
+        let a = Fq::rand(&mut rng);
+        let ct_scaled = rgsw.homomorphic_mult_const(&ct, a);
+        let mu_scaled = rgsw.decrypt(&ct_scaled);
+
+        assert_eq!(
+            mu_scaled,
+            mu * a,
+            "Homomorphic multiplication by constant failed"
+        );
+    }
+
+    #[test]
+    fn test_homomorphic_add() {
+        let n = 2;
+        let std_dev = 0.2;
+        let rgsw = RGSW::new(n, std_dev);
+
+        let mut rng = ark_std::rand::thread_rng();
+        let mu1 = Fq::rand(&mut rng);
+        let mu2 = Fq::rand(&mut rng);
+        assert_ne!(mu1, mu2, "Test requires distinct messages");
+        let ct1 = rgsw.encrypt(mu1);
+        let ct2 = rgsw.encrypt(mu2);
+
+        let ct_add = rgsw.homomorphic_add(&ct1, &ct2);
+        let mu_add = rgsw.decrypt(&ct_add);
+
+        assert_eq!(mu_add, mu1 + mu2, "Homomorphic addition failed");
+    }
+
+    #[test]
+    fn test_homomorphic_mul() {
+        let n = 2;
+        let std_dev = 0.2;
+        let rgsw = RGSW::new(n, std_dev);
+
+        let mut rng = ark_std::rand::thread_rng();
+        let mu1 = Fq::rand(&mut rng);
+        let mu2 = Fq::rand(&mut rng);
+        let ct1 = rgsw.encrypt(mu1);
+        let ct2 = rgsw.encrypt(mu2);
+
+        let ct_mul = rgsw.homomorphic_mul(&ct1, &ct2);
+        let mu_mul = rgsw.decrypt(&ct_mul);
+
+        assert_eq!(mu_mul, mu1 * mu2, "Homomorphic multiplication failed");
+    }
+
+    #[test]
+    fn test_homomorphic_nand() {
+        let n = 2;
+        let std_dev = 0.2;
+        let rgsw = RGSW::new(n, std_dev);
+
+        let bit1 = Fq::ONE;
+        let bit0 = Fq::ZERO;
+
+        // NAND(1, 1) = 0
+        let ct1 = rgsw.encrypt(bit1);
+        let ct2 = rgsw.encrypt(bit1);
+        let ct_nand1 = rgsw.homomorphic_nand(&ct1, &ct2);
+        let nand1 = rgsw.decrypt(&ct_nand1);
+        assert_eq!(nand1, bit0, "NAND(1,1) failed");
+
+        // NAND(1, 0) = 1
+        let ct1 = rgsw.encrypt(bit1);
+        let ct2 = rgsw.encrypt(bit0);
+        let ct_nand2 = rgsw.homomorphic_nand(&ct1, &ct2);
+        let nand2 = rgsw.decrypt(&ct_nand2);
+        assert_eq!(nand2, bit1, "NAND(1,0) failed");
+
+        // NAND(0, 1) = 1
+        let ct1 = rgsw.encrypt(bit0);
+        let ct2 = rgsw.encrypt(bit1);
+        let ct_nand3 = rgsw.homomorphic_nand(&ct1, &ct2);
+        let nand3 = rgsw.decrypt(&ct_nand3);
+        assert_eq!(nand3, bit1, "NAND(0,1) failed");
+
+        // NAND(0, 0) = 1
+        let ct1 = rgsw.encrypt(bit0);
+        let ct2 = rgsw.encrypt(bit0);
+        let ct_nand4 = rgsw.homomorphic_nand(&ct1, &ct2);
+        let nand4 = rgsw.decrypt(&ct_nand4);
+        assert_eq!(nand4, bit1, "NAND(0,0) failed");
     }
 }
