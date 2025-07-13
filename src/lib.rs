@@ -7,6 +7,9 @@ pub use rlwe::*;
 mod rgsw;
 use rgsw::*;
 
+mod utils;
+pub use utils::*;
+
 mod math;
 pub use math::*;
 

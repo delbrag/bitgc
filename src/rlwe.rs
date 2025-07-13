@@ -1,8 +1,9 @@
 use crate::{Fq, Poly};
 use ark_ff::AdditiveGroup;
 use ark_ff::PrimeField;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use rand_distr::{Distribution, Normal};
 use std::ops::{Add, Mul, Sub};
 
@@ -20,13 +21,14 @@ pub struct RLWE {
 impl RLWE {
     /// Sample a small random polynomial with Gaussian-distributed coefficients
     /// Typically used for secret keys and error terms
-    fn sample_small_poly(n: usize, std_dev: f64, rng: &mut impl Rng) -> Poly {
+    fn sample_small_poly(n: usize, std_dev: f64) -> Poly {
+        let mut rng = ChaCha20Rng::seed_from_u64(42); // Use a fixed seed for reproducibility
         let normal = Normal::new(0.0, std_dev).unwrap();
         let coeffs = (0..n)
             .map(|_| {
-                let x: f64 = normal.sample(rng);       // Sample from Gaussian
-                let rounded = x.round() as i64;        // Round to nearest integer
-                Fq::from(rounded)                      // Map to finite field element
+                let x: f64 = normal.sample(&mut rng); // Sample from Gaussian
+                let rounded = x.round() as i64; // Round to nearest integer
+                Fq::from(rounded) // Map to finite field element
             })
             .collect();
         Poly { coeffs, n }
@@ -34,22 +36,22 @@ impl RLWE {
 
     /// Sample a uniformly random polynomial in R_q
     /// Coefficients are sampled uniformly from [0, q)
-    fn sample_uniform_poly(n: usize, q: u64, rng: &mut impl Rng) -> Poly {
-        let coeffs = (0..n)
-            .map(|_| Fq::from(rng.random_range(0..q)))
-            .collect();
+    fn sample_uniform_poly(n: usize, q: u64) -> Poly {
+        let mut rng = ChaCha20Rng::seed_from_u64(42); // Use a fixed seed for reproducibility
+        let coeffs = (0..n).map(|_| Fq::from(rng.random_range(0..q))).collect();
         Poly { coeffs, n }
     }
 
     /// Generate a public/secret key pair for RLWE encryption
     /// Secret key: s ~ small noise
     /// Public key: a ← uniform, b = a*s + e
-    pub fn keygen(n: usize, q: u64, std_dev: f64, rng: &mut impl Rng) -> Self {
-        let sk = Self::sample_small_poly(n, std_dev, rng); // secret key s
-        let a = Self::sample_uniform_poly(n, q, rng);      // random a(x)
-        let e = Self::sample_small_poly(n, std_dev, rng);  // small error e
-        let as_mul = a.mul(&sk);                           // compute a*s
-        let b = as_mul.add(&e);                            // compute b = a*s + e
+    pub fn keygen(n: usize, std_dev: f64) -> Self {
+        let q = Fq::MODULUS.0[0] as u64; // get modulus from field
+        let sk = Self::sample_small_poly(n, std_dev); // secret key s
+        let a = Self::sample_uniform_poly(n, q); // random a(x)
+        let e = Self::sample_small_poly(n, std_dev); // small error e
+        let as_mul = a.mul(&sk); // compute a*s
+        let b = as_mul.add(&e); // compute b = a*s + e
         RLWE {
             n,
             q,
@@ -87,15 +89,15 @@ impl RLWE {
     /// Encrypt a plaintext polynomial `m(x)` using the public key (a, b)
     /// Generates ephemeral secret r and error polynomials e1, e2
     /// Ciphertext: (c0 = a*r + e1, c1 = b*r + e2 + m)
-    pub fn encrypt(&self, m: &Poly, rng: &mut impl Rng) -> (Poly, Poly) {
-        let r = Self::sample_small_poly(self.n, self.std_dev, rng);   // ephemeral secret
-        let e1 = Self::sample_small_poly(self.n, self.std_dev, rng);  // noise 1
-        let e2 = Self::sample_small_poly(self.n, self.std_dev, rng);  // noise 2
+    pub fn encrypt(&self, m: &Poly) -> (Poly, Poly) {
+        let r = Self::sample_small_poly(self.n, self.std_dev); // ephemeral secret
+        let e1 = Self::sample_small_poly(self.n, self.std_dev); // noise 1
+        let e2 = Self::sample_small_poly(self.n, self.std_dev); // noise 2
         let a = &self.pk.0;
         let b = &self.pk.1;
-        let c0 = a.mul(&r).add(&e1);               // c0 = a*r + e1
-        let mut c1 = b.mul(&r).add(&e2);           // c1 = b*r + e2
-        c1 = c1.add(m);                            // add message
+        let c0 = a.mul(&r).add(&e1); // c0 = a*r + e1
+        let mut c1 = b.mul(&r).add(&e2); // c1 = b*r + e2
+        c1 = c1.add(m); // add message
         (c0, c1)
     }
 
@@ -103,8 +105,8 @@ impl RLWE {
     /// Computes c1 - s*c0 = m + noise
     pub fn decrypt(&self, c: &(Poly, Poly)) -> Poly {
         let (c0, c1) = c;
-        let s_mul = c0.mul(&self.sk);             // s * c0
-        c1.sub(&s_mul)                            // c1 - s*c0 ≈ m
+        let s_mul = c0.mul(&self.sk); // s * c0
+        c1.sub(&s_mul) // c1 - s*c0 ≈ m
     }
 }
 
@@ -113,14 +115,9 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
 
-    fn new_rng() -> ChaCha20Rng {
-        ChaCha20Rng::seed_from_u64(42)
-    }
-
     #[test]
     fn test_keygen_validity() {
-        let mut rng = new_rng();
-        let rlwe = RLWE::keygen(8, 40961, 3.2, &mut rng);
+        let rlwe = RLWE::keygen(8, 3.2);
         assert_eq!(rlwe.sk.coeffs.len(), 8);
         assert_eq!(rlwe.pk.0.coeffs.len(), 8);
         assert_eq!(rlwe.pk.1.coeffs.len(), 8);
@@ -128,28 +125,31 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_random_bits() {
-        let mut rng = new_rng();
-        let rlwe = RLWE::keygen(8, 40961, 3.2, &mut rng);
+        let rlwe = RLWE::keygen(8, 3.2);
+        let mut rng = ChaCha20Rng::seed_from_u64(42); // Use a fixed seed for reproducibility
 
-        let msg_bits = vec![1, 0, 1, 1, 0, 0, 1, 0];
-        let msg_poly = RLWE::encode_bits(&msg_bits, rlwe.q);
+        for i in 0..100 {
+            // generate a 8-bit random 0-1 message
+            let msg_bits: Vec<u8> = (0..8).map(|_| rng.random_range(0..2)).collect();
 
-        let ct = rlwe.encrypt(&msg_poly, &mut rng);
-        let decrypted_poly = rlwe.decrypt(&ct);
-        let recovered_bits = RLWE::decode_bits(&decrypted_poly, rlwe.q);
+            let msg_poly = RLWE::encode_bits(&msg_bits, rlwe.q);
 
-        assert_eq!(msg_bits, recovered_bits);
+            let ct = rlwe.encrypt(&msg_poly);
+            let decrypted_poly = rlwe.decrypt(&ct);
+            let recovered_bits = RLWE::decode_bits(&decrypted_poly, rlwe.q);
+
+            assert_eq!(msg_bits, recovered_bits, "Mismatch at iteration {}", i);
+        }
     }
 
     #[test]
     fn test_encrypt_decrypt_all_zeros() {
-        let mut rng = new_rng();
-        let rlwe = RLWE::keygen(8, 40961, 3.2, &mut rng);
+        let rlwe = RLWE::keygen(8, 3.2);
 
         let msg_bits = vec![0; 8];
         let msg_poly = RLWE::encode_bits(&msg_bits, rlwe.q);
 
-        let ct = rlwe.encrypt(&msg_poly, &mut rng);
+        let ct = rlwe.encrypt(&msg_poly);
         let decrypted_poly = rlwe.decrypt(&ct);
         let recovered_bits = RLWE::decode_bits(&decrypted_poly, rlwe.q);
 
@@ -158,13 +158,12 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_all_ones() {
-        let mut rng = new_rng();
-        let rlwe = RLWE::keygen(8, 40961, 3.2, &mut rng);
+        let rlwe = RLWE::keygen(8, 3.2);
 
         let msg_bits = vec![1; 8];
         let msg_poly = RLWE::encode_bits(&msg_bits, rlwe.q);
 
-        let ct = rlwe.encrypt(&msg_poly, &mut rng);
+        let ct = rlwe.encrypt(&msg_poly);
         let decrypted_poly = rlwe.decrypt(&ct);
         let recovered_bits = RLWE::decode_bits(&decrypted_poly, rlwe.q);
 
@@ -173,13 +172,12 @@ mod tests {
 
     #[test]
     fn test_multiple_messages() {
-        let mut rng = new_rng();
-        let rlwe = RLWE::keygen(8, 40961, 3.2, &mut rng);
+        let rlwe = RLWE::keygen(8, 3.2);
 
         for i in 0..10 {
             let msg_bits = (0..8).map(|j| ((i + j) % 2) as u8).collect::<Vec<_>>();
             let msg_poly = RLWE::encode_bits(&msg_bits, rlwe.q);
-            let ct = rlwe.encrypt(&msg_poly, &mut rng);
+            let ct = rlwe.encrypt(&msg_poly);
             let decrypted_poly = rlwe.decrypt(&ct);
             let recovered_bits = RLWE::decode_bits(&decrypted_poly, rlwe.q);
             assert_eq!(msg_bits, recovered_bits, "Mismatch at iteration {}", i);

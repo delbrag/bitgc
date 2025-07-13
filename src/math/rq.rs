@@ -2,15 +2,24 @@ use std::fmt;
 
 use ark_ff::AdditiveGroup;
 use ark_ff::{Fp, MontBackend, MontConfig};
+use ark_ff::{PrimeField, UniformRand};
+use rand::Rng;
 use rand_chacha::ChaCha20Rng;
 use rand_distr::{Distribution, Normal};
-use std::ops::{Add, Mul, Sub};
+use std::ops::{Add, Mul, Neg, Sub};
 
 #[derive(MontConfig)]
-#[modulus = "40961"]
+#[modulus = "4294967291"] // 2^32 - 5, a prime number
 #[generator = "3"]
 pub struct FqConfig;
 pub type Fq = Fp<MontBackend<FqConfig, 1>, 1>;
+
+/// Generate a random vector of size `n` with coefficients in Z_q.
+pub fn gen_random_vector(n: usize) -> Vec<Fq> {
+    // FIXME: use secure random
+    let mut rng = ark_std::rand::thread_rng();
+    (0..n).map(|_| Fq::rand(&mut rng)).collect()
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Poly {
@@ -23,6 +32,11 @@ impl Poly {
         let mut c = coeffs;
         c.resize(n, Fq::ZERO);
         Poly { coeffs: c, n }
+    }
+
+    pub fn random(n: usize) -> Self {
+        let coeffs = gen_random_vector(n);
+        Poly { coeffs, n }
     }
 
     pub fn zero(n: usize) -> Self {
@@ -38,7 +52,7 @@ impl Poly {
         self.n
     }
 
-    pub fn sample_noise(n: usize, std_dev: f64, rng: &mut ChaCha20Rng) -> Self {
+    pub fn sample_noise(n: usize, std_dev: f64, rng: &mut impl Rng) -> Self {
         let normal = Normal::new(0.0, std_dev).unwrap();
         let coeffs = (0..n)
             .map(|_| {
@@ -64,11 +78,37 @@ impl Poly {
     }
 
     pub fn decode_msg(&self, q: u64) -> Vec<u8> {
-        let half_q = Fq::from(q / 2);
+        let quarter_q = q / 4;
+        let three_quarters_q = 3 * q / 4;
         self.coeffs
             .iter()
-            .map(|&c| if c > half_q { 1 } else { 0 })
+            .map(|&c| {
+                let v = c.into_bigint().0[0];
+                if v > quarter_q && v < three_quarters_q {
+                    1
+                } else {
+                    0
+                }
+            })
             .collect()
+    }
+}
+
+impl Neg for Poly {
+    type Output = Poly;
+
+    fn neg(self) -> Poly {
+        let coeffs = self.coeffs.into_iter().map(|c| -c).collect();
+        Poly::new(coeffs, self.n)
+    }
+}
+
+impl<'a> Neg for &'a Poly {
+    type Output = Poly;
+
+    fn neg(self) -> Poly {
+        let coeffs = self.coeffs.iter().map(|&c| -c).collect();
+        Poly::new(coeffs, self.n)
     }
 }
 
@@ -149,6 +189,9 @@ impl Mul for &Poly {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
+
     #[test]
     fn test_poly_ops() {
         let n = 4;
@@ -160,10 +203,26 @@ mod tests {
         assert_eq!(sum, expected);
 
         let diff = &a - &b;
-        let expected = Poly::from_u64(&[40958, 40960, 1, 3], n); // mod 40961
+        let expected = Poly::from_u64(&[4294967288, 4294967290, 1, 3], n);
         assert_eq!(diff, expected);
 
         let prod = &a * &b;
         println!("a * b = {:?}", prod); // just show the poly for now
+
+        let neg_prod = &a * &(-b);
+        assert_eq!(neg_prod, -prod);
+    }
+
+    #[test]
+    fn test_encode_decode_msg_cycle() {
+        let mut rng = ChaCha20Rng::seed_from_u64(42);
+        let n = 8;
+        let q = 40961;
+
+        let msg: Vec<u8> = (0..n).map(|_| rng.random_range(0..2)).collect();
+
+        let poly_msg = Poly::encode_msg(&msg, n, q);
+        let decoded_msg = poly_msg.decode_msg(q);
+        assert_eq!(msg, decoded_msg);
     }
 }
