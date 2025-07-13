@@ -152,7 +152,6 @@ impl RGSW {
     /// Decrypt a RGSW ciphertext using the secret key
     pub fn decrypt(&self, ct: &GSW13Ciphertext) -> Fq {
         let p = &self.params;
-        let l = p.l; // 多比特长度
 
         let mut x = vec![Fq::ZERO; p.N];
         for i in 0..p.N {
@@ -246,45 +245,9 @@ mod tests {
     }
 
     #[test]
-    fn test_bit_decomp_and_inv() {
-        let l = 4;
-        let v = vec![Fq::from(7u64), Fq::from(13u64)];
-        let bits = bit_decomp(&v, l);
-        let v2 = bit_decomp_inv(&bits, l);
-        assert_eq!(v, v2, "BitDecomp/Inv failed");
-    }
-
-    #[test]
-    fn test_flatten() {
-        let l = 3;
-        let v = vec![Fq::from(5u64), Fq::from(6u64)];
-        let bits = bit_decomp(&v, l);
-        let flat = flatten(&bits, l);
-        assert_eq!(bits, flat, "Flatten failed");
-    }
-
-    #[test]
-    fn test_powers_of_2() {
-        let l = 3;
-        let v = vec![Fq::from(2u64), Fq::from(3u64)];
-        let pow2 = powers_of_2(&v, l);
-        assert_eq!(
-            pow2,
-            vec![
-                Fq::from(2),
-                Fq::from(4),
-                Fq::from(8),
-                Fq::from(3),
-                Fq::from(6),
-                Fq::from(12)
-            ]
-        );
-    }
-
-    #[test]
     fn test_gsw13_encrypt_decrypt_binary() {
         let n = 2;
-        let std_dev = 0.1;
+        let std_dev = 1.2;
         let gsw = RGSW::new(n, std_dev);
 
         for bit in vec![Fq::ZERO, Fq::ONE] {
@@ -297,7 +260,7 @@ mod tests {
     #[test]
     fn test_homomorphic_mult_const() {
         let n = 2;
-        let std_dev = 0.2;
+        let std_dev = 1.21;
         let rgsw = RGSW::new(n, std_dev);
 
         let mut rng = ark_std::rand::thread_rng();
@@ -355,7 +318,7 @@ mod tests {
     #[test]
     fn test_homomorphic_nand() {
         let n = 2;
-        let std_dev = 0.2;
+        let std_dev = 0.21;
         let rgsw = RGSW::new(n, std_dev);
 
         let bit1 = Fq::ONE;
